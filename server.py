@@ -36,7 +36,7 @@ from error_codes import ErrorCode, ErrorMessage
 
 load_dotenv()
 
-mcp = FastMCP("workwitness-sheets-mcp", host="0.0.0.0", port=8000)
+mcp = FastMCP("workwitness-sheets-mcp")
 
 
 # ── Expanded no-blocker values (Fix 7) ───────────────────────────────
@@ -580,6 +580,63 @@ def get_employee_status(
             ErrorCode.INTERNAL_ERROR,
             ErrorMessage.INTERNAL_ERROR,
         )
+
+
+# ── Add OAuth endpoints directly to the FastMCP app ──────────────────
+# FastMCP exposes custom_route() to add HTTP routes alongside /mcp.
+# This is cleaner than wrapping in a second Starlette app.
+
+@mcp.custom_route("/.well-known/oauth-authorization-server", methods=["GET"])
+async def discovery(request):
+    from starlette.responses import JSONResponse
+    base = os.environ.get("MCP_BASE_URL", "http://localhost:8000")
+    return JSONResponse({
+        "issuer": base,
+        "authorization_endpoint": f"{base}/authorize",
+        "token_endpoint": f"{base}/token",
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code"],
+        "code_challenge_methods_supported": ["S256"],
+        "token_endpoint_auth_methods_supported": ["client_secret_post"],
+    })
+
+
+@mcp.custom_route("/authorize", methods=["GET"])
+async def authorize(request):
+    from starlette.responses import RedirectResponse
+    import urllib.parse
+    params = dict(request.query_params)
+    params["client_id"] = os.environ.get("CLERK_OAUTH_CLIENT_ID", "")
+    clerk_url = os.environ.get("CLERK_OAUTH_AUTHORIZE_URL", "")
+    query = urllib.parse.urlencode(params)
+    return RedirectResponse(url=f"{clerk_url}?{query}", status_code=302)
+
+
+@mcp.custom_route("/token", methods=["POST"])
+async def token(request):
+    import httpx
+    from starlette.responses import JSONResponse
+    form = await request.form()
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            os.environ.get("CLERK_OAUTH_TOKEN_URL", ""),
+            data={
+                "grant_type": "authorization_code",
+                "code": form.get("code", ""),
+                "redirect_uri": form.get("redirect_uri", ""),
+                "client_id": os.environ.get("CLERK_OAUTH_CLIENT_ID", ""),
+                "client_secret": os.environ.get("CLERK_OAUTH_CLIENT_SECRET", ""),
+                "code_verifier": form.get("code_verifier", ""),
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=10,
+        )
+    if response.status_code != 200:
+        return JSONResponse(
+            {"error": "token_exchange_failed", "detail": response.text},
+            status_code=400,
+        )
+    return JSONResponse(response.json())
 
 
 if __name__ == "__main__":

@@ -30,7 +30,7 @@ load_dotenv()
 # ── Configuration ─────────────────────────────────────────────────────
 # ── Configuration ─────────────────────────────────────────────────────
 SHEET_ID         = os.environ.get("SHEET_ID", "")
-CREDENTIALS_FILE = os.environ.get("GOOGLE_CREDENTIALS_FILE", "credentials.json")
+CREDENTIALS_FILE = os.environ.get("GOOGLE_CREDENTIALS_FILE", "/app/credentials.json")
 
 # ── Write credentials.json from base64 env var if present ────────────
 # Railway cannot mount local files, so the service account JSON is
