@@ -594,6 +594,7 @@ async def discovery(request):
         "issuer": base,
         "authorization_endpoint": f"{base}/authorize",
         "token_endpoint": f"{base}/token",
+        "registration_endpoint": f"{base}/register",
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code"],
         "code_challenge_methods_supported": ["S256"],
@@ -637,6 +638,20 @@ async def token(request):
             status_code=400,
         )
     return JSONResponse(response.json())
+
+@mcp.custom_route("/register", methods=["POST"])
+async def register(request):
+    from starlette.responses import JSONResponse
+    # Return pre-configured client credentials
+    # Claude.ai calls this to get client_id/secret for the OAuth flow
+    return JSONResponse({
+        "client_id": os.environ.get("CLERK_OAUTH_CLIENT_ID", ""),
+        "client_secret": os.environ.get("CLERK_OAUTH_CLIENT_SECRET", ""),
+        "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
+        "grant_types": ["authorization_code"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "client_secret_post",
+    })
 
 
 if __name__ == "__main__":
