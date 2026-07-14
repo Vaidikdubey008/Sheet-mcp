@@ -28,7 +28,6 @@ from error_codes import ErrorCode, ErrorMessage
 load_dotenv()
 
 # ── Configuration ─────────────────────────────────────────────────────
-# ── Configuration ─────────────────────────────────────────────────────
 SHEET_ID         = os.environ.get("SHEET_ID", "")
 CREDENTIALS_FILE = os.environ.get("GOOGLE_CREDENTIALS_FILE", "/app/credentials.json")
 
