@@ -652,11 +652,12 @@ async def oauth_consent(request):
         password = form.get("password", "")
 
         # Read OAuth params from hidden form fields — not query string
-        client_id = form.get("client_id", "")
-        redirect_uri = form.get("redirect_uri", "")
-        code_challenge = form.get("code_challenge", "")
-        code_challenge_method = form.get("code_challenge_method", "")
-        state = form.get("state", "")
+        # Read from form fields first, fall back to query params
+        client_id = form.get("client_id", "") or request.query_params.get("client_id", "")
+        redirect_uri = form.get("redirect_uri", "") or request.query_params.get("redirect_uri", "")
+        code_challenge = form.get("code_challenge", "") or request.query_params.get("code_challenge", "")
+        code_challenge_method = form.get("code_challenge_method", "") or request.query_params.get("code_challenge_method", "")
+        state = form.get("state", "") or request.query_params.get("state", "")
 
         try:
             from supabase import create_client
