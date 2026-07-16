@@ -604,45 +604,47 @@ async def oauth_consent(request):
     from starlette.responses import HTMLResponse, RedirectResponse
     import httpx
 
-    authorization_id = request.query_params.get("authorization_id", "")
-    
     if request.method == "GET":
-        # Instead of custom login form, redirect to Supabase's own OAuth UI
-        # Supabase OAuth server has its own hosted consent page
-        supabase_url = os.environ.get("SUPABASE_URL", "")
-        supabase_anon_key = os.environ.get("SUPABASE_ANON_KEY", "")
-        
-        # Forward all query params to Supabase's authorization endpoint
-        params = dict(request.query_params)
-        
+        # Capture ALL possible OAuth params — Supabase sends different formats
+        client_id = request.query_params.get("client_id", "")
+        redirect_uri = request.query_params.get("redirect_uri", "")
+        code_challenge = request.query_params.get("code_challenge", "")
+        code_challenge_method = request.query_params.get("code_challenge_method", "")
+        state = request.query_params.get("state", "")
+        authorization_id = request.query_params.get("authorization_id", "")
+
+        print(f"DEBUG GET consent: client_id={client_id[:20] if client_id else 'EMPTY'} auth_id={authorization_id[:20] if authorization_id else 'EMPTY'}", flush=True)
+
         html = f"""
         <!DOCTYPE html>
         <html>
         <head>
             <title>GrowwStacks MCP — Authorize</title>
             <style>
-                body {{ font-family: sans-serif; max-width: 400px; margin: 80px auto; padding: 0 20px; text-align: center; }}
-                .logo {{ font-size: 24px; font-weight: bold; color: #10b981; margin-bottom: 16px; }}
+                body {{ font-family: sans-serif; max-width: 400px; margin: 80px auto; padding: 0 20px; }}
+                .logo {{ font-size: 24px; font-weight: bold; color: #10b981; margin-bottom: 8px; }}
                 h2 {{ color: #1a1a1a; }}
                 p {{ color: #666; font-size: 14px; }}
-                .btn {{ display: inline-block; padding: 12px 32px; background: #10b981; color: white; border: none; border-radius: 6px; font-size: 16px; cursor: pointer; text-decoration: none; margin-top: 16px; }}
-                .btn:hover {{ background: #059669; }}
-                .debug {{ font-size: 11px; color: #999; margin-top: 20px; word-break: break-all; }}
+                input[type=email], input[type=password] {{ width: 100%; padding: 10px; margin: 8px 0; border: 1px solid #ddd; border-radius: 6px; box-sizing: border-box; font-size: 14px; }}
+                button {{ width: 100%; padding: 12px; background: #10b981; color: white; border: none; border-radius: 6px; font-size: 16px; cursor: pointer; margin-top: 8px; }}
+                button:hover {{ background: #059669; }}
             </style>
         </head>
         <body>
             <div class="logo">GrowwStacks</div>
             <h2>Authorize AI Access</h2>
-            <p>An AI assistant is requesting access to your WorkWitness employee data.</p>
+            <p>Sign in to grant your AI assistant access to WorkWitness data.</p>
             <form method="POST">
+                <input type="hidden" name="client_id" value="{client_id}"/>
+                <input type="hidden" name="redirect_uri" value="{redirect_uri}"/>
+                <input type="hidden" name="code_challenge" value="{code_challenge}"/>
+                <input type="hidden" name="code_challenge_method" value="{code_challenge_method}"/>
+                <input type="hidden" name="state" value="{state}"/>
                 <input type="hidden" name="authorization_id" value="{authorization_id}"/>
-                <input type="email" name="email" placeholder="Email address" required
-                    style="width:100%;padding:10px;margin:8px 0;border:1px solid #ddd;border-radius:6px;box-sizing:border-box;font-size:14px;"/>
-                <input type="password" name="password" placeholder="Password" required
-                    style="width:100%;padding:10px;margin:8px 0;border:1px solid #ddd;border-radius:6px;box-sizing:border-box;font-size:14px;"/>
-                <button type="submit" class="btn" style="width:100%;">Authorize Access</button>
+                <input type="email" name="email" placeholder="Email address" required/>
+                <input type="password" name="password" placeholder="Password" required/>
+                <button type="submit">Authorize Access</button>
             </form>
-            <p class="debug">authorization_id: {authorization_id[:20]}...</p>
         </body>
         </html>
         """
@@ -652,17 +654,25 @@ async def oauth_consent(request):
         form = await request.form()
         email = form.get("email", "")
         password = form.get("password", "")
+
+        # Read ALL params from form hidden fields, fall back to query string
+        client_id = form.get("client_id", "") or request.query_params.get("client_id", "")
+        redirect_uri = form.get("redirect_uri", "") or request.query_params.get("redirect_uri", "")
+        code_challenge = form.get("code_challenge", "") or request.query_params.get("code_challenge", "")
+        code_challenge_method = form.get("code_challenge_method", "") or request.query_params.get("code_challenge_method", "")
+        state = form.get("state", "") or request.query_params.get("state", "")
         authorization_id = form.get("authorization_id", "") or request.query_params.get("authorization_id", "")
+
+        print(f"DEBUG POST: client_id={client_id[:20] if client_id else 'EMPTY'} auth_id={authorization_id[:20] if authorization_id else 'EMPTY'}", flush=True)
 
         try:
             from supabase import create_client
-            from starlette.responses import RedirectResponse
 
             supabase_url = os.environ.get("SUPABASE_URL", "")
             supabase_anon_key = os.environ.get("SUPABASE_ANON_KEY", "")
             supabase = create_client(supabase_url, supabase_anon_key)
 
-            # Step 1 — sign in
+            # Step 1 — sign in to get access token
             result = supabase.auth.sign_in_with_password({
                 "email": email,
                 "password": password
@@ -671,62 +681,94 @@ async def oauth_consent(request):
                 raise Exception("Login failed — incorrect email or password")
 
             access_token = result.session.access_token
-            print(f"DEBUG: Login success, user={result.user.email}, auth_id={authorization_id}", flush=True)
+            print(f"DEBUG: Login success user={result.user.email}", flush=True)
 
-            # Step 2 — approve authorization using correct Supabase endpoint
-            import httpx
-            approve_resp = httpx.post(
-                f"{supabase_url}/auth/v1/oauth/authorize",
-                headers={
-                    "Authorization": f"Bearer {access_token}",
-                    "apikey": supabase_anon_key,
-                    "Content-Type": "application/json",
-                },
-                json={"authorization_id": authorization_id},
-                follow_redirects=False,
-            )
-            
-            print(f"DEBUG approve: status={approve_resp.status_code} body={approve_resp.text[:400]}", flush=True)
+            # Step 2 — approve via Supabase OAuth authorize endpoint
+            # Use GET with Bearer token — this is how Supabase OAuth server works
+            if client_id:
+                # Standard PKCE flow — client_id present
+                approve_resp = httpx.get(
+                    f"{supabase_url}/auth/v1/oauth/authorize",
+                    headers={
+                        "Authorization": f"Bearer {access_token}",
+                        "apikey": supabase_anon_key,
+                    },
+                    params={
+                        "response_type": "code",
+                        "client_id": client_id,
+                        "redirect_uri": redirect_uri,
+                        "code_challenge": code_challenge,
+                        "code_challenge_method": code_challenge_method,
+                        "state": state,
+                    },
+                    follow_redirects=False,
+                )
+            else:
+                # authorization_id flow
+                approve_resp = httpx.post(
+                    f"{supabase_url}/auth/v1/oauth/authorize",
+                    headers={
+                        "Authorization": f"Bearer {access_token}",
+                        "apikey": supabase_anon_key,
+                        "Content-Type": "application/json",
+                    },
+                    json={"authorization_id": authorization_id},
+                    follow_redirects=False,
+                )
 
+            print(f"DEBUG approve: status={approve_resp.status_code} headers={dict(approve_resp.headers)} body={approve_resp.text[:400]}", flush=True)
+
+            # Handle redirect response
             if approve_resp.status_code in (301, 302, 303, 307, 308):
                 location = approve_resp.headers.get("location", "")
-                print(f"DEBUG redirect to: {location}", flush=True)
+                print(f"DEBUG redirecting to: {location[:100]}", flush=True)
                 return RedirectResponse(url=location, status_code=302)
-            
+
+            # Handle 200 with redirect URL in body
             if approve_resp.status_code == 200:
-                data = approve_resp.json()
-                print(f"DEBUG 200 response: {data}", flush=True)
-                redirect_url = (
-                    data.get("redirect_uri") or 
-                    data.get("url") or 
-                    data.get("location") or
-                    data.get("redirect_to")
-                )
-                if redirect_url:
-                    return RedirectResponse(url=redirect_url, status_code=302)
-                raise Exception(f"200 OK but no redirect URL found. Response: {approve_resp.text[:200]}")
-            
+                try:
+                    data = approve_resp.json()
+                    print(f"DEBUG 200 body: {data}", flush=True)
+                    redirect_url = (
+                        data.get("redirect_uri") or
+                        data.get("url") or
+                        data.get("location") or
+                        data.get("redirect_to")
+                    )
+                    if redirect_url:
+                        return RedirectResponse(url=redirect_url, status_code=302)
+                except Exception:
+                    pass
+                raise Exception(f"200 OK but no redirect URL. Body: {approve_resp.text[:200]}")
+
             raise Exception(f"Approve returned {approve_resp.status_code}: {approve_resp.text[:300]}")
 
         except Exception as e:
             error_detail = str(e)
-            print(f"DEBUG consent error: {error_detail}", flush=True)
+            print(f"DEBUG error: {error_detail}", flush=True)
             html = f"""
             <!DOCTYPE html>
             <html>
-            <head><title>GrowwStacks MCP — Authorize</title>
-            <style>
-                body {{ font-family: sans-serif; max-width: 400px; margin: 80px auto; padding: 0 20px; }}
-                .logo {{ font-size: 24px; font-weight: bold; color: #10b981; margin-bottom: 8px; }}
-                .error {{ color: #dc2626; font-size: 13px; margin-bottom: 12px; background: #fef2f2; padding: 8px; border-radius: 4px; }}
-                input {{ width: 100%; padding: 10px; margin: 8px 0; border: 1px solid #ddd; border-radius: 6px; box-sizing: border-box; font-size: 14px; }}
-                button {{ width: 100%; padding: 12px; background: #10b981; color: white; border: none; border-radius: 6px; font-size: 16px; cursor: pointer; }}
-            </style></head>
+            <head>
+                <title>GrowwStacks MCP — Authorize</title>
+                <style>
+                    body {{ font-family: sans-serif; max-width: 400px; margin: 80px auto; padding: 0 20px; }}
+                    .logo {{ font-size: 24px; font-weight: bold; color: #10b981; margin-bottom: 8px; }}
+                    .error {{ color: #dc2626; font-size: 13px; margin-bottom: 12px; background: #fef2f2; padding: 8px; border-radius: 4px; word-break: break-all; }}
+                    input[type=email], input[type=password] {{ width: 100%; padding: 10px; margin: 8px 0; border: 1px solid #ddd; border-radius: 6px; box-sizing: border-box; font-size: 14px; }}
+                    button {{ width: 100%; padding: 12px; background: #10b981; color: white; border: none; border-radius: 6px; font-size: 16px; cursor: pointer; }}
+                </style>
+            </head>
             <body>
                 <div class="logo">GrowwStacks</div>
                 <h2>Authorize AI Access</h2>
                 <div class="error">{error_detail}</div>
                 <form method="POST">
+                    <input type="hidden" name="client_id" value="{client_id}"/>
+                    <input type="hidden" name="redirect_uri" value="{redirect_uri}"/>
+                    <input type="hidden" name="code_challenge" value="{code_challenge}"/>
+                    <input type="hidden" name="code_challenge_method" value="{code_challenge_method}"/>
+                    <input type="hidden" name="state" value="{state}"/>
                     <input type="hidden" name="authorization_id" value="{authorization_id}"/>
                     <input type="email" name="email" placeholder="Email address" required/>
                     <input type="password" name="password" placeholder="Password" required/>
