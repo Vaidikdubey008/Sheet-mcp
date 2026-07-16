@@ -684,7 +684,6 @@ async def oauth_consent(request):
             print(f"DEBUG: Login success user={result.user.email}", flush=True)
 
             # Step 2 — approve via Supabase callback endpoint
-            # This is the correct endpoint — accepts POST with authorization_id + state
             approve_resp = httpx.post(
                 f"{supabase_url}/auth/v1/callback",
                 headers={
@@ -692,10 +691,8 @@ async def oauth_consent(request):
                     "apikey": supabase_anon_key,
                     "Content-Type": "application/json",
                 },
-                json={
-                    "authorization_id": authorization_id,
-                    "state": state,
-                },
+                params={"state": state},
+                json={"authorization_id": authorization_id},
                 follow_redirects=False,
             )
 
