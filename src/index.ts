@@ -9,8 +9,8 @@ export class MCPContainer extends Container {
   defaultPort = 8000;
   sleepAfter = "5m";
   envVars = {
-    SHEET_ID: env.SHEET_ID,
-    GOOGLE_CREDENTIALS_BASE64: env.GOOGLE_CREDENTIALS_BASE64,
+    SUPABASE_URL: env.SUPABASE_URL,
+    SUPABASE_SERVICE_KEY: env.SUPABASE_SERVICE_KEY,
     CLERK_JWKS_URL: env.CLERK_JWKS_URL,
     CLERK_ISSUER: env.CLERK_ISSUER,
     CLERK_OAUTH_CLIENT_ID: env.CLERK_OAUTH_CLIENT_ID,
@@ -25,7 +25,6 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
-    // Protected resource metadata
     if (
       url.pathname === "/.well-known/oauth-protected-resource" ||
       url.pathname === "/.well-known/oauth-protected-resource/mcp"
@@ -39,7 +38,6 @@ export default {
       );
     }
 
-    // OAuth discovery
     if (url.pathname === "/.well-known/oauth-authorization-server") {
       const clerkIssuer = env.CLERK_ISSUER || "";
       return new Response(
@@ -57,7 +55,6 @@ export default {
       );
     }
 
-    // Dynamic client registration
     if (url.pathname === "/oauth/register" && request.method === "POST") {
       const body = await request.json() as Record<string, unknown>;
       const redirectUris = (body.redirect_uris as string[]) || [];
@@ -76,7 +73,6 @@ export default {
       );
     }
 
-    // POST /mcp — require Bearer token
     if (url.pathname === "/mcp" && request.method === "POST") {
       const authHeader = request.headers.get("Authorization");
       if (!authHeader || !authHeader.startsWith("Bearer ")) {
@@ -89,7 +85,6 @@ export default {
       }
     }
 
-    // Everything else goes to the container
     const id = env.MCP_CONTAINER.idFromName("sheet-mcp");
     const container = env.MCP_CONTAINER.get(id);
     return container.fetch(request);

@@ -36,7 +36,7 @@ RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
 # ── Copy application code ────────────────────────────────────────────────
 # Only the files the server actually imports. credentials.json and .env
 # are deliberately NOT copied — see the note at the top of this file.
-COPY server.py auth.py rate_limiter.py validators.py sheets_client.py \
+COPY server.py auth.py rate_limiter.py validators.py supabase_client.py \
      error_codes.py audit_logger.py ./
 
 # audit_logs is created at runtime by audit_logger.py's os.makedirs() call,

@@ -24,9 +24,10 @@ from mcp.server.fastmcp import FastMCP, Context
 from auth import verify_token, extract_bearer_token, AuthError
 from rate_limiter import check_rate_limit, RateLimitError
 from validators import validate_input, ValidationError, EmployeeStatusInput
-from sheets_client import (
+from supabase_client import (
     get_employee_by_code,
     get_latest_activity_for_employee,
+    get_user_permissions,
     SheetsError,
 )
 from audit_logger import log_tool_call
@@ -37,14 +38,14 @@ load_dotenv()
 mcp = FastMCP("workwitness-sheets-mcp", host="0.0.0.0", port=8000)
 
 
-# ── Expanded no-blocker values (Fix 7) ───────────────────────────────
+# ── Expanded no-blocker values (Fix 7) 
 NO_BLOCKER_VALUES = {
     "none", "n/a", "nil", "no", "no blockers",
     "no blocker", "-", "—", "", "null", "na", "false", "0"
 }
 
 
-# ── Helper functions ──────────────────────────────────────────────────
+# ── Helper functions 
 
 def _parse_int(value, default: int = 0) -> int:
     try:
@@ -116,8 +117,45 @@ def _safe_log(api_key: str, tool: str, inputs: dict, outcome: str, duration_ms: 
     except Exception as log_error:
         print(f"AUDIT LOG FAILURE: {log_error}", file=sys.stderr)
 
+def _get_permissions(claims: dict) -> dict:
+    """
+    Looks up user permissions from Supabase.
+    Falls back to default permissions if user not found.
+    """
+    user_sub = claims.get("sub", "")
+    perms = get_user_permissions(user_sub)
+    if perms is None:
+        return {
+            "role": "viewer",
+            "allowed_tools": ["get_employee_status"],
+            "allowed_employees": None,
+        }
+    return perms
 
-# ── The single tool ───────────────────────────────────────────────────
+
+def _check_tool_permission(user_permissions: dict, tool_name: str) -> None:
+    allowed_tools = user_permissions.get("allowed_tools")
+    if allowed_tools is None:
+        return
+    if tool_name not in allowed_tools:
+        raise AuthError(
+            Errors.FORBIDDEN,
+            message=f"Your account does not have permission to use '{tool_name}'. "
+                    f"Contact your administrator for access."
+        )
+
+
+def _check_employee_permission(user_permissions: dict, employee_code: str) -> None:
+    allowed_employees = user_permissions.get("allowed_employees")
+    if allowed_employees is None:
+        return
+    if employee_code.upper() not in [e.upper() for e in allowed_employees]:
+        raise AuthError(
+            Errors.FORBIDDEN,
+            message=f"You do not have permission to view employee '{employee_code}'. "
+                    f"Contact your administrator for access."
+        )
+# ── The single tool 
 
 @mcp.tool()
 def get_employee_status(
@@ -154,16 +192,23 @@ def get_employee_status(
 
     try:
 
-        # ════════════════════════════════════════════════════════
+
         # LAYER 2 — AUTHENTICATION (OAuth 2.1 / JWT)
-        # ════════════════════════════════════════════════════════
+      
         request = ctx.request_context.request
         request_headers = dict(request.headers) if request is not None else {}
         api_key = extract_bearer_token(request_headers)
         claims = verify_token(api_key)
-        # ════════════════════════════════════════════════════════
+
+        # TEMPORARY DEBUG — remove after testing
+        if employee_code.upper() == "DEBUG":
+            return {
+                "debug": True,
+                "token_claims": {k: str(v) for k, v in claims.items()},
+            }
+    
         # LAYER 3 — IDENTITY EXTRACTION
-        # ════════════════════════════════════════════════════════
+  
         company_id = claims.get("company_id") or claims.get("sub")
         if not company_id:
             raise AuthError(
@@ -171,22 +216,30 @@ def get_employee_status(
                 message="Token is missing required identity claims."
             )
 
-        # ════════════════════════════════════════════════════════
+    
+        # LAYER 3.5 — PERMISSION LOOKUP
+    
+        user_permissions = _get_permissions(claims)
+        _check_tool_permission(user_permissions, tool_name)
+
+        # LAYER 3.6 — EMPLOYEE DATA SCOPING
+    
+        _check_employee_permission(user_permissions, employee_code)
+
         # LAYER 4 — RATE LIMITING
-        # ════════════════════════════════════════════════════════
         check_rate_limit(company_id)
 
-        # ════════════════════════════════════════════════════════
+   
         # LAYER 5 — INPUT VALIDATION
-        # ════════════════════════════════════════════════════════
+      
         validated = validate_input(
             EmployeeStatusInput,
             {"employee_code": employee_code}
         )
 
-        # ════════════════════════════════════════════════════════
+     
         # LAYER 6 — DATA FETCH (Google Sheets API)
-        # ════════════════════════════════════════════════════════
+  
         employee = get_employee_by_code(validated.employee_code)
 
         if not employee:
@@ -206,9 +259,9 @@ def get_employee_status(
 
         activity = get_latest_activity_for_employee(validated.employee_code)
 
-        # ════════════════════════════════════════════════════════
+  
         # LAYER 7 — AUDIT LOGGING
-        # ════════════════════════════════════════════════════════
+   
         duration = int((time.time() - start_time) * 1000)
         _safe_log(
             api_key=company_id,
@@ -218,9 +271,8 @@ def get_employee_status(
             duration_ms=duration,
         )
 
-        # ════════════════════════════════════════════════════════
         # LAYER 8 — RESPONSE SHAPING
-        # ════════════════════════════════════════════════════════
+  
         base = {
             "employee_code": employee.get("employee_code", "").upper(),
             "name": employee.get("name", "Unknown"),
