@@ -14,12 +14,12 @@ from audit_logger import log_auth_failure
 load_dotenv()
 
 # ── Clerk configuration from .env ────────────────────────────────────
-JWKS_URL = os.environ.get("SUPABASE_JWKS_URL", "").strip()
-ISSUER   = os.environ.get("SUPABASE_ISSUER", "").strip()
+JWKS_URL = os.environ.get("CLERK_JWKS_URL", "").strip()
+ISSUER   = os.environ.get("CLERK_ISSUER", "").strip()
 
 if not JWKS_URL or not ISSUER:
     raise RuntimeError(
-        "SUPABASE_JWKS_URL and SUPABASE_ISSUER must be set in your .env file. "
+        "CLERK_JWKS_URL and CLERK_ISSUER must be set. "
         "The server cannot start without OAuth 2.1 configuration."
     )
 

@@ -17,7 +17,6 @@
 import os
 import sys
 import time
-import urllib.parse
 from datetime import datetime, timezone, datetime as dt
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP, Context
@@ -158,16 +157,10 @@ def get_employee_status(
         # ════════════════════════════════════════════════════════
         # LAYER 2 — AUTHENTICATION (OAuth 2.1 / JWT)
         # ════════════════════════════════════════════════════════
-        # TEMPORARY — auth bypassed for connectivity testing
-        # TODO: restore after confirming Google Sheets data layer works
-        # Restore these lines when ready:
-        # request = ctx.request_context.request
-        # request_headers = dict(request.headers) if request is not None else {}
-        # api_key = extract_bearer_token(request_headers)
-        # claims = verify_token(api_key)
-
-        claims = {"sub": "test-company", "company_id": "test-company"}
-
+        request = ctx.request_context.request
+        request_headers = dict(request.headers) if request is not None else {}
+        api_key = extract_bearer_token(request_headers)
+        claims = verify_token(api_key)
         # ════════════════════════════════════════════════════════
         # LAYER 3 — IDENTITY EXTRACTION
         # ════════════════════════════════════════════════════════
@@ -328,156 +321,30 @@ def get_employee_status(
 @mcp.custom_route("/.well-known/oauth-authorization-server", methods=["GET"])
 async def discovery(request):
     from starlette.responses import JSONResponse
-    supabase_issuer = os.environ.get("SUPABASE_ISSUER", "")
+    clerk_issuer = os.environ.get("CLERK_ISSUER", "")
     mcp_base = os.environ.get("MCP_BASE_URL", "http://localhost:8000")
     return JSONResponse({
-        "issuer": supabase_issuer,
-        "authorization_endpoint": f"{mcp_base}/oauth/consent",
-        "token_endpoint": f"{supabase_issuer}/oauth/token",
-        "registration_endpoint": f"{supabase_issuer}/oauth/clients",
+        "issuer": clerk_issuer,
+        "authorization_endpoint": f"{clerk_issuer}/oauth/authorize",
+        "token_endpoint": f"{clerk_issuer}/oauth/token",
+        "registration_endpoint": f"{mcp_base}/oauth/register",
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["client_secret_basic", "none"],
     })
 
-
-@mcp.custom_route("/debug-headers", methods=["GET", "POST"])
-async def debug_headers(request):
+@mcp.custom_route("/oauth/register", methods=["POST"])
+async def oauth_register(request):
     from starlette.responses import JSONResponse
+    client_id = os.environ.get("CLERK_OAUTH_CLIENT_ID", "")
+    client_secret = os.environ.get("CLERK_OAUTH_CLIENT_SECRET", "")
     return JSONResponse({
-        "headers": dict(request.headers),
-        "query_params": dict(request.query_params),
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "client_id_issued_at": 0,
+        "client_secret_expires_at": 0,
     })
-
-
-@mcp.custom_route("/oauth/consent", methods=["GET", "POST"])
-async def oauth_consent(request):
-    from starlette.responses import HTMLResponse, RedirectResponse
-    import httpx
-
-    if request.method == "GET":
-        supabase_url = os.environ.get("SUPABASE_URL", "")
-
-        params = dict(request.query_params)
-
-        # Inject required params if missing
-        if not params.get("client_id"):
-            params["client_id"] = "2c765805-ae25-4ceb-8d4e-1b9051628ac9"
-        if not params.get("redirect_uri"):
-            params["redirect_uri"] = "https://claude.ai/api/mcp/auth_callback"
-        if not params.get("response_type"):
-            params["response_type"] = "code"
-
-        query_string = urllib.parse.urlencode(params)
-        supabase_auth_url = f"{supabase_url}/auth/v1/oauth/authorize?{query_string}"
-
-        print(f"DEBUG GET: redirecting to: {supabase_auth_url[:200]}", flush=True)
-        return RedirectResponse(url=supabase_auth_url, status_code=302)
-
-    if request.method == "POST":
-        form = await request.form()
-        email = form.get("email", "")
-        password = form.get("password", "")
-
-        client_id = form.get("client_id", "") or request.query_params.get("client_id", "")
-        redirect_uri = form.get("redirect_uri", "") or request.query_params.get("redirect_uri", "")
-        code_challenge = form.get("code_challenge", "") or request.query_params.get("code_challenge", "")
-        code_challenge_method = form.get("code_challenge_method", "") or request.query_params.get("code_challenge_method", "")
-        state = form.get("state", "") or request.query_params.get("state", "")
-        authorization_id = form.get("authorization_id", "") or request.query_params.get("authorization_id", "")
-
-        print(f"DEBUG POST: client_id={client_id[:20] if client_id else 'EMPTY'} auth_id={authorization_id[:20] if authorization_id else 'EMPTY'} state={state[:20] if state else 'EMPTY'}", flush=True)
-
-        try:
-            from supabase import create_client
-
-            supabase_url = os.environ.get("SUPABASE_URL", "")
-            supabase_anon_key = os.environ.get("SUPABASE_ANON_KEY", "")
-            supabase = create_client(supabase_url, supabase_anon_key)
-
-            result = supabase.auth.sign_in_with_password({
-                "email": email,
-                "password": password
-            })
-            if not result.user:
-                raise Exception("Login failed — incorrect email or password")
-
-            access_token = result.session.access_token
-            print(f"DEBUG: Login success user={result.user.email}", flush=True)
-
-            approve_resp = httpx.post(
-                f"{supabase_url}/auth/v1/callback",
-                headers={
-                    "Authorization": f"Bearer {access_token}",
-                    "apikey": supabase_anon_key,
-                    "Content-Type": "application/json",
-                },
-                params={"state": state} if state else {},
-                json={"authorization_id": authorization_id},
-                follow_redirects=False,
-            )
-
-            print(f"DEBUG approve: status={approve_resp.status_code} body={approve_resp.text[:400]}", flush=True)
-
-            if approve_resp.status_code in (301, 302, 303, 307, 308):
-                location = approve_resp.headers.get("location", "")
-                print(f"DEBUG redirecting to: {location[:100]}", flush=True)
-                return RedirectResponse(url=location, status_code=302)
-
-            if approve_resp.status_code == 200:
-                try:
-                    data = approve_resp.json()
-                    redirect_url = (
-                        data.get("redirect_uri") or
-                        data.get("url") or
-                        data.get("location") or
-                        data.get("redirect_to")
-                    )
-                    if redirect_url:
-                        return RedirectResponse(url=redirect_url, status_code=302)
-                except Exception:
-                    pass
-                raise Exception(f"200 OK but no redirect URL. Body: {approve_resp.text[:200]}")
-
-            raise Exception(f"Approve returned {approve_resp.status_code}: {approve_resp.text[:300]}")
-
-        except Exception as e:
-            error_detail = str(e)
-            print(f"DEBUG error: {error_detail}", flush=True)
-            html = f"""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>GrowwStacks MCP — Authorize</title>
-                <style>
-                    body {{ font-family: sans-serif; max-width: 400px; margin: 80px auto; padding: 0 20px; }}
-                    .logo {{ font-size: 24px; font-weight: bold; color: #10b981; margin-bottom: 8px; }}
-                    .error {{ color: #dc2626; font-size: 13px; margin-bottom: 12px; background: #fef2f2; padding: 8px; border-radius: 4px; word-break: break-all; }}
-                    input[type=email], input[type=password] {{ width: 100%; padding: 10px; margin: 8px 0; border: 1px solid #ddd; border-radius: 6px; box-sizing: border-box; font-size: 14px; }}
-                    button {{ width: 100%; padding: 12px; background: #10b981; color: white; border: none; border-radius: 6px; font-size: 16px; cursor: pointer; }}
-                </style>
-            </head>
-            <body>
-                <div class="logo">GrowwStacks</div>
-                <h2>Authorize AI Access</h2>
-                <div class="error">{error_detail}</div>
-                <form method="POST">
-                    <input type="hidden" name="client_id" value="{client_id}"/>
-                    <input type="hidden" name="redirect_uri" value="{redirect_uri}"/>
-                    <input type="hidden" name="code_challenge" value="{code_challenge}"/>
-                    <input type="hidden" name="code_challenge_method" value="{code_challenge_method}"/>
-                    <input type="hidden" name="state" value="{state}"/>
-                    <input type="hidden" name="authorization_id" value="{authorization_id}"/>
-                    <input type="email" name="email" placeholder="Email address" required/>
-                    <input type="password" name="password" placeholder="Password" required/>
-                    <button type="submit">Try Again</button>
-                </form>
-            </body>
-            </html>
-            """
-            return HTMLResponse(html, status_code=400)
-
-
+    
 if __name__ == "__main__":
     mcp.run(transport="streamable-http")

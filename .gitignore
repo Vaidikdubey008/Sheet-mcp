@@ -4,3 +4,5 @@ credentials.json
 __pycache__/
 *.pyc
 audit_logs/
+node_modules
+package-lock.json
